@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>POS Register App</title>
+  <!-- Chart.js（グラフ描画用ライブラリ）の読み込み -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
       --primary-color: #3b82f6;
@@ -83,6 +85,11 @@
       margin-bottom: 16px;
       font-weight: bold;
     }
+    .chart-container {
+      margin-bottom: 20px;
+      position: relative;
+      height: 250px;
+    }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -134,6 +141,14 @@
       </form>
     </div>
 
+    <!-- 売上グラフ -->
+    <div class="card">
+      <h2>日別売上グラフ</h2>
+      <div class="chart-container">
+        <canvas id="salesChart"></canvas>
+      </div>
+    </div>
+
     <!-- 販売履歴・集計 -->
     <div class="card">
       <h2>販売履歴</h2>
@@ -166,7 +181,6 @@
       serverTimestamp 
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-    // 設定情報
     const firebaseConfig = {
       apiKey: "AIzaSyAlBtItYPa_uam4dsKPEer1MVe9QTwCGiQ",
       authDomain: "tesuto-7f8d5.firebaseapp.com",
@@ -176,15 +190,14 @@
       appId: "1:331096023870:web:8de2a4c2095eea9867426f"
     };
 
-    // Firebase 初期化
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
     const db = getFirestore(app);
     const provider = new GoogleAuthProvider();
 
     let currentUser = null;
+    let myChart = null;
 
-    // DOM要素の取得
     const loginSection = document.getElementById('loginSection');
     const mainSection = document.getElementById('mainSection');
     const btnLogin = document.getElementById('btnLogin');
@@ -203,10 +216,8 @@
     const recordsList = document.getElementById('recordsList');
     const todayTotal = document.getElementById('todayTotal');
 
-    // 本日の日付をデフォルト値に設定
     saleDateInput.value = new Date().toISOString().split('T')[0];
 
-    // 合計金額の自動計算
     function calculateTotal() {
       const price = parseFloat(unitPriceInput.value) || 0;
       const qty = parseInt(quantityInput.value) || 0;
@@ -215,7 +226,6 @@
     unitPriceInput.addEventListener('input', calculateTotal);
     quantityInput.addEventListener('input', calculateTotal);
 
-    // 認証状態の検知
     onAuthStateChanged(auth, (user) => {
       if (user) {
         currentUser = user;
@@ -230,7 +240,6 @@
       }
     });
 
-    // Googleログイン
     btnLogin.addEventListener('click', async () => {
       try {
         await signInWithPopup(auth, provider);
@@ -239,12 +248,10 @@
       }
     });
 
-    // ログアウト
     btnLogout.addEventListener('click', async () => {
       await signOut(auth);
     });
 
-    // 販売データの登録
     posForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       errorMessage.style.display = 'none';
@@ -272,7 +279,6 @@
           createdAt: serverTimestamp()
         });
 
-        // フォームリセット
         itemNameInput.value = '';
         unitPriceInput.value = '';
         quantityInput.value = '1';
@@ -283,7 +289,6 @@
       }
     });
 
-    // ログインユーザーの販売データ読み込み（リアルタイム）
     function loadRecords(userId) {
       const q = query(
         collection(db, "sales"), 
@@ -298,15 +303,29 @@
         if (snapshot.empty) {
           recordsList.innerHTML = '<p>登録されたデータはありません。</p>';
           todayTotal.textContent = '0';
+          updateChart({});
           return;
         }
 
         const docs = [];
+        const dailyTotals = {};
+
         snapshot.forEach((doc) => {
-          docs.push({ id: doc.id, ...doc.data() });
+          const data = doc.data();
+          docs.push({ id: doc.id, ...data });
+
+          // 日付ごとの合計を計算
+          if (dailyTotals[data.saleDate]) {
+            dailyTotals[data.saleDate] += data.totalPrice;
+          } else {
+            dailyTotals[data.saleDate] = data.totalPrice;
+          }
         });
 
-        // 日付降順でソート
+        // グラフ更新
+        updateChart(dailyTotals);
+
+        // 日付降順ソート
         docs.sort((a, b) => new Date(b.saleDate) - new Date(a.saleDate));
 
         docs.forEach((item) => {
@@ -331,7 +350,6 @@
 
         todayTotal.textContent = todaySum.toLocaleString();
 
-        // 削除ボタンイベント付与
         document.querySelectorAll('.btn-delete').forEach(btn => {
           btn.addEventListener('click', async (e) => {
             const id = e.target.getAttribute('data-id');
@@ -340,6 +358,40 @@
             }
           });
         });
+      });
+    }
+
+    // グラフ更新関数
+    function updateChart(dailyData) {
+      const dates = Object.keys(dailyData).sort();
+      const totals = dates.map(date => dailyData[date]);
+
+      const ctx = document.getElementById('salesChart').getContext('2d');
+
+      if (myChart) {
+        myChart.destroy();
+      }
+
+      myChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: dates,
+          datasets: [{
+            label: '売上金額 (円)',
+            data: totals,
+            backgroundColor: '#3b82f6',
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: {
+              beginAtZero: true
+            }
+          }
+        }
       });
     }
   </script>
