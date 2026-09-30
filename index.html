@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>POS Register App</title>
+  <style>
+    :root {
+      --primary-color: #3b82f6;
+      --bg-color: #f3f4f6;
+      --card-bg: #ffffff;
+      --text-color: #1f2937;
+      --border-color: #e5e7eb;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      padding: 16px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .card {
+      background: var(--card-bg);
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    h1, h2 { margin-bottom: 16px; font-size: 1.25rem; }
+    .auth-container { text-align: center; padding: 40px 20px; }
+    button {
+      background-color: var(--primary-color);
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    button:hover { opacity: 0.9; }
+    button.btn-danger { background-color: #ef4444; }
+    button.btn-secondary { background-color: #6b7280; }
+    
+    .form-group { margin-bottom: 12px; }
+    label { display: block; margin-bottom: 4px; font-size: 0.875rem; font-weight: 600; }
+    input, textarea, select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      font-size: 1rem;
+    }
+    .total-preview {
+      font-size: 1.1rem;
+      font-weight: bold;
+      color: #059669;
+      margin: 12px 0;
+    }
+    .user-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .record-item {
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .record-item:last-child { border-bottom: none; }
+    .record-details { flex-grow: 1; }
+    .record-actions { margin-left: 12px; }
+    .error-message { color: #ef4444; font-size: 0.875rem; margin-top: 4px; display: none; }
+    .summary-box {
+      background-color: #e0f2fe;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      font-weight: bold;
+    }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <!-- ログイン前画面 -->
+  <div id="loginSection" class="card auth-container">
+    <h1>POSレジ アプリ</h1>
+    <p style="margin-bottom: 20px;">ご利用を開始するにはGoogleアカウントでログインしてください。</p>
+    <button id="btnLogin">Googleでログイン</button>
+  </div>
+
+  <!-- ログイン後メイン画面 -->
+  <div id="mainSection" class="hidden">
+    <div class="card user-info">
+      <div>
+        <span id="userName">ユーザー</span> さん
+      </div>
+      <button id="btnLogout" class="btn-secondary">ログアウト</button>
+    </div>
+
+    <!-- 販売記録フォーム -->
+    <div class="card">
+      <h2>販売の記録</h2>
+      <form id="posForm">
+        <div class="form-group">
+          <label for="itemName">商品名 *</label>
+          <input type="text" id="itemName" required>
+        </div>
+        <div class="form-group">
+          <label for="unitPrice">単価 (円) *</label>
+          <input type="number" id="unitPrice" min="0" required>
+        </div>
+        <div class="form-group">
+          <label for="quantity">個数 *</label>
+          <input type="number" id="quantity" min="1" value="1" required>
+        </div>
+        <div class="total-preview">合計金額: ¥<span id="totalDisplay">0</span></div>
+        <div class="form-group">
+          <label for="saleDate">日付 *</label>
+          <input type="date" id="saleDate" required>
+        </div>
+        <div class="form-group">
+          <label for="memo">メモ</label>
+          <textarea id="memo" rows="2"></textarea>
+        </div>
+        <div id="errorMessage" class="error-message">正しい値を入力してください。</div>
+        <button type="submit" style="width: 100%; margin-top: 8px;">登録する</button>
+      </form>
+    </div>
+
+    <!-- 販売履歴・集計 -->
+    <div class="card">
+      <h2>販売履歴</h2>
+      <div class="summary-box">
+        本日の合計売上: ¥<span id="todayTotal">0</span>
+      </div>
+      <div id="recordsList">読み込み中...</div>
+    </div>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { 
+      getAuth, 
+      GoogleAuthProvider, 
+      signInWithPopup, 
+      signOut, 
+      onAuthStateChanged 
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import { 
+      getFirestore, 
+      collection, 
+      addDoc, 
+      query, 
+      where, 
+      onSnapshot, 
+      deleteDoc, 
+      doc, 
+      serverTimestamp 
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // 設定情報
+    const firebaseConfig = {
+      apiKey: "AIzaSyAlBtItYPa_uam4dsKPEer1MVe9QTwCGiQ",
+      authDomain: "tesuto-7f8d5.firebaseapp.com",
+      projectId: "tesuto-7f8d5",
+      storageBucket: "tesuto-7f8d5.firebasestorage.app",
+      messagingSenderId: "331096023870",
+      appId: "1:331096023870:web:8de2a4c2095eea9867426f"
+    };
+
+    // Firebase 初期化
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const provider = new GoogleAuthProvider();
+
+    let currentUser = null;
+
+    // DOM要素の取得
+    const loginSection = document.getElementById('loginSection');
+    const mainSection = document.getElementById('mainSection');
+    const btnLogin = document.getElementById('btnLogin');
+    const btnLogout = document.getElementById('btnLogout');
+    const userName = document.getElementById('userName');
+    
+    const posForm = document.getElementById('posForm');
+    const itemNameInput = document.getElementById('itemName');
+    const unitPriceInput = document.getElementById('unitPrice');
+    const quantityInput = document.getElementById('quantity');
+    const totalDisplay = document.getElementById('totalDisplay');
+    const saleDateInput = document.getElementById('saleDate');
+    const memoInput = document.getElementById('memo');
+    const errorMessage = document.getElementById('errorMessage');
+    
+    const recordsList = document.getElementById('recordsList');
+    const todayTotal = document.getElementById('todayTotal');
+
+    // 本日の日付をデフォルト値に設定
+    saleDateInput.value = new Date().toISOString().split('T')[0];
+
+    // 合計金額の自動計算
+    function calculateTotal() {
+      const price = parseFloat(unitPriceInput.value) || 0;
+      const qty = parseInt(quantityInput.value) || 0;
+      totalDisplay.textContent = (price * qty).toLocaleString();
+    }
+    unitPriceInput.addEventListener('input', calculateTotal);
+    quantityInput.addEventListener('input', calculateTotal);
+
+    // 認証状態の検知
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        currentUser = user;
+        userName.textContent = user.displayName || "ユーザー";
+        loginSection.classList.add('hidden');
+        mainSection.classList.remove('hidden');
+        loadRecords(user.uid);
+      } else {
+        currentUser = null;
+        loginSection.classList.remove('hidden');
+        mainSection.classList.add('hidden');
+      }
+    });
+
+    // Googleログイン
+    btnLogin.addEventListener('click', async () => {
+      try {
+        await signInWithPopup(auth, provider);
+      } catch (error) {
+        alert("ログインに失敗しました: " + error.message);
+      }
+    });
+
+    // ログアウト
+    btnLogout.addEventListener('click', async () => {
+      await signOut(auth);
+    });
+
+    // 販売データの登録
+    posForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorMessage.style.display = 'none';
+
+      const itemName = itemNameInput.value.trim();
+      const unitPrice = parseFloat(unitPriceInput.value);
+      const quantity = parseInt(quantityInput.value);
+      const saleDate = saleDateInput.value;
+      const memo = memoInput.value.trim();
+
+      if (!itemName || isNaN(unitPrice) || isNaN(quantity) || !saleDate || unitPrice < 0 || quantity <= 0) {
+        errorMessage.style.display = 'block';
+        return;
+      }
+
+      try {
+        await addDoc(collection(db, "sales"), {
+          userId: currentUser.uid,
+          itemName: itemName,
+          unitPrice: unitPrice,
+          quantity: quantity,
+          totalPrice: unitPrice * quantity,
+          saleDate: saleDate,
+          memo: memo,
+          createdAt: serverTimestamp()
+        });
+
+        // フォームリセット
+        itemNameInput.value = '';
+        unitPriceInput.value = '';
+        quantityInput.value = '1';
+        memoInput.value = '';
+        calculateTotal();
+      } catch (error) {
+        alert("データの保存に失敗しました: " + error.message);
+      }
+    });
+
+    // ログインユーザーの販売データ読み込み（リアルタイム）
+    function loadRecords(userId) {
+      const q = query(
+        collection(db, "sales"), 
+        where("userId", "==", userId)
+      );
+
+      onSnapshot(q, (snapshot) => {
+        recordsList.innerHTML = '';
+        let todaySum = 0;
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        if (snapshot.empty) {
+          recordsList.innerHTML = '<p>登録されたデータはありません。</p>';
+          todayTotal.textContent = '0';
+          return;
+        }
+
+        const docs = [];
+        snapshot.forEach((doc) => {
+          docs.push({ id: doc.id, ...doc.data() });
+        });
+
+        // 日付降順でソート
+        docs.sort((a, b) => new Date(b.saleDate) - new Date(a.saleDate));
+
+        docs.forEach((item) => {
+          if (item.saleDate === todayStr) {
+            todaySum += item.totalPrice;
+          }
+
+          const div = document.createElement('div');
+          div.className = 'record-item';
+          div.innerHTML = `
+            <div class="record-details">
+              <strong>${item.itemName}</strong> (¥${item.unitPrice.toLocaleString()} × ${item.quantity})<br>
+              <small>日付: ${item.saleDate} | 小計: ¥${item.totalPrice.toLocaleString()}</small>
+              ${item.memo ? `<br><small style="color:#6b7280;">メモ: ${item.memo}</small>` : ''}
+            </div>
+            <div class="record-actions">
+              <button class="btn-danger btn-delete" data-id="${item.id}">削除</button>
+            </div>
+          `;
+          recordsList.appendChild(div);
+        });
+
+        todayTotal.textContent = todaySum.toLocaleString();
+
+        // 削除ボタンイベント付与
+        document.querySelectorAll('.btn-delete').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            const id = e.target.getAttribute('data-id');
+            if (confirm("この記録を削除しますか？")) {
+              await deleteDoc(doc(db, "sales", id));
+            }
+          });
+        });
+      });
+    }
+  </script>
+</body>
+</html>
